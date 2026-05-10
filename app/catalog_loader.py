@@ -33,10 +33,10 @@ class AssessmentItem(BaseModel):
 def clean_text(text: Optional[str]) -> str:
     """
     Cleans whitespace and newlines from a text safely.
-    
+
     Args:
         text (Optional[str]): The string to clean.
-        
+
     Returns:
         str: The cleaned string, with no redundant spaces or newlines.
     """
@@ -51,33 +51,33 @@ def assessment_to_document(assessment: AssessmentItem) -> str:
     """
     Converts an assessment object into a consolidated, searchable text document.
     Optimized for semantic retrieval using structured labeled sections and name repetition.
-    
+
     Args:
         assessment (AssessmentItem): The parsed assessment model.
-        
+
     Returns:
         str: A searchable text document.
     """
     clean_name = clean_text(assessment.name)
-    
+
     # Core components tailored for semantic density
     components = [
         f"Assessment Name: {clean_name}",
         f"Assessment Name: {clean_name}"  # Repeated for semantic emphasis
     ]
-    
+
     if assessment.keys:
         components.append(f"Skills: {', '.join(assessment.keys)}")
-        
+
     if assessment.job_levels:
         components.append(f"Job Levels: {', '.join(assessment.job_levels)}")
-        
+
     if assessment.languages:
         components.append(f"Languages: {', '.join(assessment.languages)}")
-        
+
     if assessment.description:
         components.append(f"Description: {clean_text(assessment.description)}")
-        
+
     # Use newline instead of pipe for cleaner semantic blocks
     return "\n".join(components)
 
@@ -86,27 +86,27 @@ def load_catalog(filepath: Path | str) -> Tuple[List[AssessmentItem], List[str]]
     """
     Loads the catalog from a JSON file, validates entries, and generates searchable documents.
     Malformed entries are skipped.
-    
+
     Args:
         filepath (Path | str): Path to the JSON catalog file.
-        
+
     Returns:
-        Tuple[List[AssessmentItem], List[str]]: A tuple containing a list of validated 
+        Tuple[List[AssessmentItem], List[str]]: A tuple containing a list of validated
         AssessmentItem objects and their corresponding searchable document strings.
     """
     filepath = Path(filepath)
     assessments: List[AssessmentItem] = []
     documents: List[str] = []
-    
+
     if not filepath.exists():
         logger.error(f"Catalog file not found at: {filepath}")
         return assessments, documents
-        
+
     logger.info(f"Loading catalog from {filepath}...")
-    
+
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
-            data = json.load(f, strict=False)
+            data = json.load(f)
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse JSON file {filepath}: {e}")
         return assessments, documents
@@ -136,11 +136,11 @@ def load_catalog(filepath: Path | str) -> Tuple[List[AssessmentItem], List[str]]
         if not isinstance(item, dict):
             skipped_count += 1
             continue
-            
+
         try:
             assessment = AssessmentItem(**item)
             document = assessment_to_document(assessment)
-            
+
             assessments.append(assessment)
             documents.append(document)
         except ValidationError as e:
@@ -161,13 +161,13 @@ if __name__ == "__main__":
     # This automatically finds data/shl_product_catalog.json universally
     base_dir = Path(__file__).resolve().parent.parent
     catalog_path = base_dir / "data" / "shl_product_catalog.json"
-    
+
     assessments, documents = load_catalog(catalog_path)
-    
+
     print("\n--- Loader Summary ---")
     print(f"Total assessments loaded: {len(assessments)}")
     print(f"Total documents generated: {len(documents)}\n")
-    
+
     if assessments:
         print("--- Sample Assessment Document ---")
         print(documents[0])

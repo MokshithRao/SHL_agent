@@ -86,11 +86,8 @@ def read_root():
         "docs": "/docs"
     }
 
-@app.get("/health", status_code=200)
-def health_check():
-    """
-    Standard health check endpoint.
-    """
+@app.get("/health")
+def health():
     return {"status": "ok"}
 
 @app.post("/chat", response_model=ChatResponse)
@@ -99,16 +96,16 @@ def handle_chat(request: ChatRequest):
     Main chat endpoint to process user messages and return recommendations.
     """
     logger.info("Processing incoming chat request.")
-    
+
     if not agent:
         raise RuntimeError("Conversational agent was not initialized properly.")
-    
+
     # Convert Pydantic models to dicts to pass to the agent
     messages_payload = [msg.model_dump() for msg in request.messages]
-    
+
     # Delegate the heavy lifting to the global agent
     agent_output = agent.chat(messages_payload)
-    
+
     # Returning parsed output, validated by FastAPI against ChatResponse
     return ChatResponse(**agent_output)
 
