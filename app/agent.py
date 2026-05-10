@@ -44,9 +44,63 @@ class SHLConversationalAgent:
                 return str(msg.get("content", ""))
         return ""
 
+    def rule_based_extraction(self, history_text: str) -> Dict[str, Any]:
+        import re
+        lower_text = history_text.lower()
+        
+        experience_levels = ["junior", "entry-level", "graduate", "mid-level", "senior", "lead", "manager", "director"]
+        skills_list = [
+            "java", "python", "aws", "docker", "sql", "spring", "react", "cloud", "backend", "frontend",
+            "kubernetes", "microservices", "api", "rest", "nodejs", "angular", "terraform", "ci cd", "linux", "git"
+        ]
+        test_needs_list = ["personality", "cognitive", "coding", "technical", "behavioral"]
+        role_indicators = [
+            "software engineer", "backend developer", "frontend developer", 
+            "sales manager", "analyst", "customer support", "leadership", 
+            "healthcare worker", "developer", "engineer", "architect",
+            "consultant", "recruiter", "qa engineer", "data engineer",
+            "data scientist", "devops engineer", "support engineer"
+        ]
+        
+        extracted = {
+            "target_role": None,
+            "experience_level": None,
+            "test_needs": None,
+            "skills": [],
+            "missing_info": []
+        }
+        
+        for exp in experience_levels:
+            if exp in lower_text:
+                extracted["experience_level"] = exp
+                break
+                
+        for skill in skills_list:
+            if re.search(r'\b' + re.escape(skill) + r'\b', lower_text):
+                extracted["skills"].append(skill)
+                
+        for test in test_needs_list:
+            if test in lower_text:
+                extracted["test_needs"] = test
+                break
+                
+        # Sort role indicators by length descending to prevent shorter strings 
+        # (like "engineer") from shadowing longer ones (like "software engineer")
+        role_indicators.sort(key=len, reverse=True)
+        for role in role_indicators:
+            if role in lower_text:
+                extracted["target_role"] = role
+                break
+                
+        return extracted
+
     def analyze_conversation(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         history_text = "\n".join([f"{msg.get('role', 'unknown')}: {msg.get('content', '')}" for msg in messages])
         
+        # 1. Rule-based extraction first
+        rules_extracted = self.rule_based_extraction(history_text)
+        
+        # 2. Gemini enrichment
         prompt = f"""
         Analyze the following conversation regarding SHL assessment recommendations.
         Extract the following information:
@@ -73,16 +127,21 @@ class SHLConversationalAgent:
             json_str = re.sub(r',\s*\}', '}', json_str)
             json_str = re.sub(r',\s*\]', ']', json_str)
             
-            return json.loads(json_str)
+            llm_extracted = json.loads(json_str)
         except Exception as e:
             logger.error(f"Error during conversation analysis: {e}")
-            return {
-                "target_role": None,
-                "experience_level": None,
-                "test_needs": None,
-                "missing_info": [],
-                "has_recommendations": False
-            }
+            llm_extracted = {}
+            
+        # 3. Merge output, prioritizing rule-based extraction
+        merged = {
+            "target_role": rules_extracted.get("target_role") or llm_extracted.get("target_role"),
+            "experience_level": rules_extracted.get("experience_level") or llm_extracted.get("experience_level"),
+            "test_needs": rules_extracted.get("test_needs") or llm_extracted.get("test_needs"),
+            "skills": rules_extracted.get("skills", []),
+            "missing_info": llm_extracted.get("missing_info", []),
+            "has_recommendations": llm_extracted.get("has_recommendations", False)
+        }
+        return merged
 
     def detect_refusal_case(self, message: str) -> bool:
         lower_msg = message.lower()
@@ -124,17 +183,22 @@ class SHLConversationalAgent:
         target_role = conversation_state.get("target_role")
         test_needs = conversation_state.get("test_needs")
         experience_level = conversation_state.get("experience_level")
+        skills = conversation_state.get("skills", [])
         
-        if not target_role and not test_needs:
+        has_role = bool(target_role)
+        has_context = bool(test_needs or experience_level or skills)
+        
+        # If we have role AND some context (skills, experience, or test type), no need to clarify
+        if has_role and has_context:
+            return False, ""
+            
+        if not has_role and not has_context:
             return True, "Could you provide more details about the role or the type of skills you want to assess?"
             
-        if not target_role:
+        if not has_role:
             return True, "What specific job role are you hiring for?"
             
-        if not experience_level and not test_needs:
-             return True, f"For the {target_role} role, are you looking for a specific experience level or test type (e.g., cognitive, personality)?"
-             
-        return False, ""
+        return True, f"For the {target_role} role, are you looking for a specific experience level, technical skills, or test type (e.g., cognitive, personality)?"
 
     def build_search_query(self, conversation_state: Dict[str, Any]) -> str:
         parts = []
@@ -144,6 +208,8 @@ class SHLConversationalAgent:
             parts.append(str(e))
         if t := conversation_state.get("test_needs"):
             parts.append(str(t))
+        if s := conversation_state.get("skills"):
+            parts.extend(s)
             
         return " ".join(parts) if parts else "general assessment"
 
@@ -178,6 +244,32 @@ class SHLConversationalAgent:
             
         return recommendations
 
+    def safe_extract_response_text(self, response: Any, fallback_message: str = "I found several relevant SHL assessments that match your hiring requirements.") -> str:
+        """
+        Safely extracts text from a Gemini response, handling missing candidates,
+        blocked outputs, or missing text attributes.
+        """
+        try:
+            if not getattr(response, "candidates", True):
+                logger.warning("Gemini response has no candidates. Output was likely blocked by safety filters.")
+                return fallback_message
+                
+            if hasattr(response, "text") and response.text:
+                return response.text.strip()
+                
+            # If parts exist but no text is directly exposed
+            if hasattr(response, "parts") and response.parts:
+                part_texts = [p.text for p in response.parts if hasattr(p, "text")]
+                if part_texts:
+                    return " ".join(part_texts).strip()
+            
+            logger.warning("Gemini response is valid but empty or missing text attributes.")
+            return fallback_message
+            
+        except Exception as e:
+            logger.warning(f"Failed to safely extract text from Gemini response: {e}")
+            return fallback_message
+
     def generate_comparison_response(self, message: str, assessments: List[Dict[str, Any]]) -> str:
         if not assessments:
             return "I don't have enough assessment information gathered to compare them properly."
@@ -198,10 +290,13 @@ class SHLConversationalAgent:
         
         try:
             response = self.model.generate_content(prompt)
-            return response.text.strip()
+            return self.safe_extract_response_text(
+                response,
+                fallback_message="I found relevant SHL assessments, but I'm unable to generate a comparison summary right now."
+            )
         except Exception as e:
-            logger.error(f"Error during comparison generation: {e}")
-            return "I encountered an issue generating a comparison. Please provide more details or try again."
+            logger.warning(f"Error during comparison generation: {e}")
+            return "I found relevant SHL assessments, but I'm unable to generate a comparison summary right now."
 
     def generate_reply(self, message: str, assessments: List[Dict[str, Any]], conversation_state: Dict[str, Any]) -> str:
         context_docs = "\n\n".join([f"Name: {res['assessment'].name}\nDescription: {res['assessment'].description}" for res in assessments])
@@ -224,10 +319,13 @@ class SHLConversationalAgent:
         
         try:
             response = self.model.generate_content(prompt)
-            return response.text.strip()
+            return self.safe_extract_response_text(
+                response,
+                fallback_message="I found several relevant SHL assessments that match your hiring requirements."
+            )
         except Exception as e:
-            logger.error(f"Error during response generation: {e}")
-            return "I encountered an issue generating a response. Please provide more details or try again."
+            logger.warning(f"Error during response generation: {e}")
+            return "I found several relevant SHL assessments that match your hiring requirements."
 
     def chat(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         latest_msg = self.extract_latest_user_message(messages)
