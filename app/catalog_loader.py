@@ -50,7 +50,7 @@ def clean_text(text: Optional[str]) -> str:
 def assessment_to_document(assessment: AssessmentItem) -> str:
     """
     Converts an assessment object into a consolidated, searchable text document.
-    Combines name, description, job levels, languages, and keys.
+    Optimized for semantic retrieval using structured labeled sections and name repetition.
     
     Args:
         assessment (AssessmentItem): The parsed assessment model.
@@ -58,12 +58,16 @@ def assessment_to_document(assessment: AssessmentItem) -> str:
     Returns:
         str: A searchable text document.
     """
+    clean_name = clean_text(assessment.name)
+    
+    # Core components tailored for semantic density
     components = [
-        f"Name: {clean_text(assessment.name)}",
+        f"Assessment Name: {clean_name}",
+        f"Assessment Name: {clean_name}"  # Repeated for semantic emphasis
     ]
     
-    if assessment.description:
-        components.append(f"Description: {clean_text(assessment.description)}")
+    if assessment.keys:
+        components.append(f"Skills: {', '.join(assessment.keys)}")
         
     if assessment.job_levels:
         components.append(f"Job Levels: {', '.join(assessment.job_levels)}")
@@ -71,10 +75,11 @@ def assessment_to_document(assessment: AssessmentItem) -> str:
     if assessment.languages:
         components.append(f"Languages: {', '.join(assessment.languages)}")
         
-    if assessment.keys:
-        components.append(f"Keys: {', '.join(assessment.keys)}")
+    if assessment.description:
+        components.append(f"Description: {clean_text(assessment.description)}")
         
-    return " | ".join(components)
+    # Use newline instead of pipe for cleaner semantic blocks
+    return "\n".join(components)
 
 
 def load_catalog(filepath: Path | str) -> Tuple[List[AssessmentItem], List[str]]:
