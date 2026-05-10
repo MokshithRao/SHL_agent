@@ -244,6 +244,32 @@ class SHLConversationalAgent:
             
         return recommendations
 
+    def safe_extract_response_text(self, response: Any, fallback_message: str = "I found several relevant SHL assessments that match your hiring requirements.") -> str:
+        """
+        Safely extracts text from a Gemini response, handling missing candidates,
+        blocked outputs, or missing text attributes.
+        """
+        try:
+            if not getattr(response, "candidates", True):
+                logger.warning("Gemini response has no candidates. Output was likely blocked by safety filters.")
+                return fallback_message
+                
+            if hasattr(response, "text") and response.text:
+                return response.text.strip()
+                
+            # If parts exist but no text is directly exposed
+            if hasattr(response, "parts") and response.parts:
+                part_texts = [p.text for p in response.parts if hasattr(p, "text")]
+                if part_texts:
+                    return " ".join(part_texts).strip()
+            
+            logger.warning("Gemini response is valid but empty or missing text attributes.")
+            return fallback_message
+            
+        except Exception as e:
+            logger.warning(f"Failed to safely extract text from Gemini response: {e}")
+            return fallback_message
+
     def generate_comparison_response(self, message: str, assessments: List[Dict[str, Any]]) -> str:
         if not assessments:
             return "I don't have enough assessment information gathered to compare them properly."
@@ -264,10 +290,13 @@ class SHLConversationalAgent:
         
         try:
             response = self.model.generate_content(prompt)
-            return response.text.strip()
+            return self.safe_extract_response_text(
+                response,
+                fallback_message="I found relevant SHL assessments, but I'm unable to generate a comparison summary right now."
+            )
         except Exception as e:
-            logger.error(f"Error during comparison generation: {e}")
-            return "I encountered an issue generating a comparison. Please provide more details or try again."
+            logger.warning(f"Error during comparison generation: {e}")
+            return "I found relevant SHL assessments, but I'm unable to generate a comparison summary right now."
 
     def generate_reply(self, message: str, assessments: List[Dict[str, Any]], conversation_state: Dict[str, Any]) -> str:
         context_docs = "\n\n".join([f"Name: {res['assessment'].name}\nDescription: {res['assessment'].description}" for res in assessments])
@@ -290,10 +319,13 @@ class SHLConversationalAgent:
         
         try:
             response = self.model.generate_content(prompt)
-            return response.text.strip()
+            return self.safe_extract_response_text(
+                response,
+                fallback_message="I found several relevant SHL assessments that match your hiring requirements."
+            )
         except Exception as e:
-            logger.error(f"Error during response generation: {e}")
-            return "I encountered an issue generating a response. Please provide more details or try again."
+            logger.warning(f"Error during response generation: {e}")
+            return "I found several relevant SHL assessments that match your hiring requirements."
 
     def chat(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         latest_msg = self.extract_latest_user_message(messages)
